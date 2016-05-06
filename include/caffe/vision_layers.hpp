@@ -14,6 +14,9 @@
 #include "caffe/neuron_layers.hpp"
 #include "caffe/proto/caffe.pb.h"
 
+#include "caffe/util/modified_permutohedral.hpp"
+#include <boost/shared_array.hpp>
+
 namespace caffe {
 
 /**
@@ -58,110 +61,52 @@ class BaseConvolutionLayer : public Layer<Dtype> {
   void backward_gpu_bias(Dtype* bias, const Dtype* input);
 #endif
 
-  /// @brief The spatial dimensions of the input.
-  inline int input_shape(int i) {
-    return (*bottom_shape_)[channel_axis_ + i];
-  }
   // reverse_dimensions should return true iff we are implementing deconv, so
   // that conv helpers know which dimensions are which.
   virtual bool reverse_dimensions() = 0;
   // Compute height_out_ and width_out_ from other parameters.
   virtual void compute_output_shape() = 0;
 
-  /// @brief The spatial dimensions of a filter kernel.
-  Blob<int> kernel_shape_;
-  /// @brief The spatial dimensions of the stride.
-  Blob<int> stride_;
-  /// @brief The spatial dimensions of the padding.
-  Blob<int> pad_;
-  /// @brief The spatial dimensions of the convolution input.
-  Blob<int> conv_input_shape_;
-  /// @brief The spatial dimensions of the col_buffer.
-  vector<int> col_buffer_shape_;
-  /// @brief The spatial dimensions of the output.
-  vector<int> output_shape_;
-  const vector<int>* bottom_shape_;
-
-  int num_spatial_axes_;
-  int bottom_dim_;
-  int top_dim_;
-
-  int channel_axis_;
+  int kernel_h_, kernel_w_;
+  int stride_h_, stride_w_;
   int num_;
   int channels_;
+  int pad_h_, pad_w_;
+  int height_, width_;
   int group_;
-  int out_spatial_dim_;
-  int weight_offset_;
   int num_output_;
+  int height_out_, width_out_;
   bool bias_term_;
   bool is_1x1_;
-  bool force_nd_im2col_;
 
  private:
   // wrap im2col/col2im so we don't have to remember the (long) argument lists
   inline void conv_im2col_cpu(const Dtype* data, Dtype* col_buff) {
-    if (!force_nd_im2col_ && num_spatial_axes_ == 2) {
-      im2col_cpu(data, conv_in_channels_,
-          conv_input_shape_.cpu_data()[1], conv_input_shape_.cpu_data()[2],
-          kernel_shape_.cpu_data()[0], kernel_shape_.cpu_data()[1],
-          pad_.cpu_data()[0], pad_.cpu_data()[1],
-          stride_.cpu_data()[0], stride_.cpu_data()[1], col_buff);
-    } else {
-      im2col_nd_cpu(data, num_spatial_axes_, conv_input_shape_.cpu_data(),
-          col_buffer_shape_.data(), kernel_shape_.cpu_data(),
-          pad_.cpu_data(), stride_.cpu_data(), col_buff);
-    }
+    im2col_cpu(data, conv_in_channels_, conv_in_height_, conv_in_width_,
+        kernel_h_, kernel_w_, pad_h_, pad_w_, stride_h_, stride_w_, col_buff);
   }
   inline void conv_col2im_cpu(const Dtype* col_buff, Dtype* data) {
-    if (!force_nd_im2col_ && num_spatial_axes_ == 2) {
-      col2im_cpu(col_buff, conv_in_channels_,
-          conv_input_shape_.cpu_data()[1], conv_input_shape_.cpu_data()[2],
-          kernel_shape_.cpu_data()[0], kernel_shape_.cpu_data()[1],
-          pad_.cpu_data()[0], pad_.cpu_data()[1],
-          stride_.cpu_data()[0], stride_.cpu_data()[1], data);
-    } else {
-      col2im_nd_cpu(col_buff, num_spatial_axes_, conv_input_shape_.cpu_data(),
-          col_buffer_shape_.data(), kernel_shape_.cpu_data(),
-          pad_.cpu_data(), stride_.cpu_data(), data);
-    }
+    col2im_cpu(col_buff, conv_in_channels_, conv_in_height_, conv_in_width_,
+        kernel_h_, kernel_w_, pad_h_, pad_w_, stride_h_, stride_w_, data);
   }
 #ifndef CPU_ONLY
   inline void conv_im2col_gpu(const Dtype* data, Dtype* col_buff) {
-    if (!force_nd_im2col_ && num_spatial_axes_ == 2) {
-      im2col_gpu(data, conv_in_channels_,
-          conv_input_shape_.cpu_data()[1], conv_input_shape_.cpu_data()[2],
-          kernel_shape_.cpu_data()[0], kernel_shape_.cpu_data()[1],
-          pad_.cpu_data()[0], pad_.cpu_data()[1],
-          stride_.cpu_data()[0], stride_.cpu_data()[1], col_buff);
-    } else {
-      im2col_nd_gpu(data, num_spatial_axes_, num_kernels_im2col_,
-          conv_input_shape_.gpu_data(), col_buffer_.gpu_shape(),
-          kernel_shape_.gpu_data(), pad_.gpu_data(),
-          stride_.gpu_data(), col_buff);
-    }
+    im2col_gpu(data, conv_in_channels_, conv_in_height_, conv_in_width_,
+        kernel_h_, kernel_w_, pad_h_, pad_w_, stride_h_, stride_w_, col_buff);
   }
   inline void conv_col2im_gpu(const Dtype* col_buff, Dtype* data) {
-    if (!force_nd_im2col_ && num_spatial_axes_ == 2) {
-      col2im_gpu(col_buff, conv_in_channels_,
-          conv_input_shape_.cpu_data()[1], conv_input_shape_.cpu_data()[2],
-          kernel_shape_.cpu_data()[0], kernel_shape_.cpu_data()[1],
-          pad_.cpu_data()[0], pad_.cpu_data()[1],
-          stride_.cpu_data()[0], stride_.cpu_data()[1], data);
-    } else {
-      col2im_nd_gpu(col_buff, num_spatial_axes_, num_kernels_col2im_,
-          conv_input_shape_.gpu_data(), col_buffer_.gpu_shape(),
-          kernel_shape_.gpu_data(), pad_.gpu_data(), stride_.gpu_data(),
-          data);
-    }
+    col2im_gpu(col_buff, conv_in_channels_, conv_in_height_, conv_in_width_,
+        kernel_h_, kernel_w_, pad_h_, pad_w_, stride_h_, stride_w_, data);
   }
 #endif
 
-  int num_kernels_im2col_;
-  int num_kernels_col2im_;
   int conv_out_channels_;
   int conv_in_channels_;
   int conv_out_spatial_dim_;
+  int conv_in_height_;
+  int conv_in_width_;
   int kernel_dim_;
+  int weight_offset_;
   int col_offset_;
   int output_offset_;
 
@@ -220,6 +165,10 @@ class ConvolutionLayer : public BaseConvolutionLayer<Dtype> {
       : BaseConvolutionLayer<Dtype>(param) {}
 
   virtual inline const char* type() const { return "Convolution"; }
+  virtual inline DiagonalAffineMap<Dtype> coord_map() {
+    return FilterMap<Dtype>(this->kernel_h_, this->kernel_w_, this->stride_h_,
+        this->stride_w_, this->pad_h_, this->pad_w_).inv();
+  }
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
@@ -253,8 +202,11 @@ class DeconvolutionLayer : public BaseConvolutionLayer<Dtype> {
  public:
   explicit DeconvolutionLayer(const LayerParameter& param)
       : BaseConvolutionLayer<Dtype>(param) {}
-
   virtual inline const char* type() const { return "Deconvolution"; }
+  virtual inline DiagonalAffineMap<Dtype> coord_map() {
+    return FilterMap<Dtype>(this->kernel_h_, this->kernel_w_, this->stride_h_,
+        this->stride_w_, this->pad_h_, this->pad_w_);
+  }
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
@@ -304,26 +256,143 @@ class CuDNNConvolutionLayer : public ConvolutionLayer<Dtype> {
   bool handles_setup_;
   cudnnHandle_t* handle_;
   cudaStream_t*  stream_;
-
-  // algorithms for forward and backwards convolutions
-  cudnnConvolutionFwdAlgo_t *fwd_algo_;
-  cudnnConvolutionBwdFilterAlgo_t *bwd_filter_algo_;
-  cudnnConvolutionBwdDataAlgo_t *bwd_data_algo_;
-
   vector<cudnnTensorDescriptor_t> bottom_descs_, top_descs_;
   cudnnTensorDescriptor_t    bias_desc_;
   cudnnFilterDescriptor_t      filter_desc_;
   vector<cudnnConvolutionDescriptor_t> conv_descs_;
-  int bottom_offset_, top_offset_, bias_offset_;
-
-  size_t *workspace_fwd_sizes_;
-  size_t *workspace_bwd_data_sizes_;
-  size_t *workspace_bwd_filter_sizes_;
-  size_t workspaceSizeInBytes;  // size of underlying storage
-  void *workspaceData;  // underlying storage
-  void **workspace;  // aliases into workspaceData
+  int bottom_offset_, top_offset_, weight_offset_, bias_offset_;
+  size_t workspaceSizeInBytes;
+  void *workspace;
 };
 #endif
+
+template <typename Dtype>
+class MeanfieldIteration {
+
+ public:
+  /**
+   * Must be invoked only once after the construction of the layer.
+   */
+  void OneTimeSetUp(
+      Blob<Dtype>* const unary_terms,
+      Blob<Dtype>* const softmax_input,
+      Blob<Dtype>* const output_blob,
+      const shared_ptr<ModifiedPermutohedral> spatial_lattice,
+      const Blob<Dtype>* const spatial_norm);
+
+  /**
+   * Must be invoked before invoking {@link Forward_cpu()}
+   */
+  virtual void PrePass(
+      const vector<shared_ptr<Blob<Dtype> > >&  parameters_to_copy_from,
+      const vector<shared_ptr<ModifiedPermutohedral> >* const bilateral_lattices,
+      const Blob<Dtype>* const bilateral_norms);
+
+  /**
+   * Forward pass - to be called during inference.
+   */
+  virtual void Forward_cpu();
+
+  /**
+   * Backward pass - to be called during training.
+   */
+  virtual void Backward_cpu();
+
+  // A quick hack. This should be properly encapsulated.
+  vector<shared_ptr<Blob<Dtype> > >& blobs() {
+    return blobs_;
+  }
+
+ protected:
+  vector<shared_ptr<Blob<Dtype> > > blobs_;
+
+  int count_;
+  int num_;
+  int channels_;
+  int height_;
+  int width_;
+  int num_pixels_;
+
+  Blob<Dtype> spatial_out_blob_;
+  Blob<Dtype> bilateral_out_blob_;
+  Blob<Dtype> pairwise_;
+  Blob<Dtype> softmax_input_;
+  Blob<Dtype> prob_;
+  Blob<Dtype> message_passing_;
+
+  vector<Blob<Dtype>*> softmax_top_vec_;
+  vector<Blob<Dtype>*> softmax_bottom_vec_;
+  vector<Blob<Dtype>*> sum_top_vec_;
+  vector<Blob<Dtype>*> sum_bottom_vec_;
+
+  shared_ptr<SoftmaxLayer<Dtype> > softmax_layer_;
+  shared_ptr<EltwiseLayer<Dtype> > sum_layer_;
+
+  shared_ptr<ModifiedPermutohedral> spatial_lattice_;
+  const vector<shared_ptr<ModifiedPermutohedral> >* bilateral_lattices_;
+
+  const Blob<Dtype>* spatial_norm_;
+  const Blob<Dtype>* bilateral_norms_;
+
+};
+
+
+template <typename Dtype>
+class MultiStageMeanfieldLayer : public Layer<Dtype> {
+
+ public:
+  explicit MultiStageMeanfieldLayer(const LayerParameter& param) : Layer<Dtype>(param) {}
+
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+
+  virtual inline const char* type() const {
+    return "MultiStageMeanfield";
+  }
+  virtual inline int ExactNumBottomBlobs() const { return 3; }
+  virtual inline int ExactNumTopBlobs() const { return 1; }
+
+ protected:
+  virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+  virtual void Backward_cpu(const vector<Blob<Dtype>*>& top,
+      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  virtual void compute_spatial_kernel(float* const output_kernel);
+  virtual void compute_bilateral_kernel(const Blob<Dtype>* const rgb_blob, const int n, float* const output_kernel);
+
+  int count_;
+  int num_;
+  int channels_;
+  int height_;
+  int width_;
+  int num_pixels_;
+
+  Dtype theta_alpha_;
+  Dtype theta_beta_;
+  Dtype theta_gamma_;
+  int num_iterations_;
+
+  boost::shared_array<Dtype> norm_feed_;
+  Blob<Dtype> spatial_norm_;
+  Blob<Dtype> bilateral_norms_;
+
+  vector<Blob<Dtype>*> split_layer_bottom_vec_;
+  vector<Blob<Dtype>*> split_layer_top_vec_;
+  vector<shared_ptr<Blob<Dtype> > > split_layer_out_blobs_;
+  vector<shared_ptr<Blob<Dtype> > > iteration_output_blobs_;
+  vector<shared_ptr<MeanfieldIteration<Dtype> > > meanfield_iterations_;
+
+  shared_ptr<SplitLayer<Dtype> > split_layer_;
+
+  shared_ptr<ModifiedPermutohedral> spatial_lattice_;
+  boost::shared_array<float> bilateral_kernel_buffer_;
+  vector<shared_ptr<ModifiedPermutohedral> > bilateral_lattices_;
+};
+
 
 /**
  * @brief A helper for image operations that rearranges image regions into
@@ -356,22 +425,11 @@ class Im2colLayer : public Layer<Dtype> {
   virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
       const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
 
-  /// @brief The spatial dimensions of a filter kernel.
-  Blob<int> kernel_shape_;
-  /// @brief The spatial dimensions of the stride.
-  Blob<int> stride_;
-  /// @brief The spatial dimensions of the padding.
-  Blob<int> pad_;
-
-  int num_spatial_axes_;
-  int bottom_dim_;
-  int top_dim_;
-
-  int channel_axis_;
-  int num_;
+  int kernel_h_, kernel_w_;
+  int stride_h_, stride_w_;
   int channels_;
-
-  bool force_nd_im2col_;
+  int height_, width_;
+  int pad_h_, pad_w_;
 };
 
 // Forward declare PoolingLayer and SplitLayer for use in LRNLayer.
@@ -396,6 +454,9 @@ class LRNLayer : public Layer<Dtype> {
   virtual inline const char* type() const { return "LRN"; }
   virtual inline int ExactNumBottomBlobs() const { return 1; }
   virtual inline int ExactNumTopBlobs() const { return 1; }
+  virtual inline DiagonalAffineMap<Dtype> coord_map() {
+    return DiagonalAffineMap<Dtype>::identity(2);
+  }
 
  protected:
   virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
@@ -453,65 +514,6 @@ class LRNLayer : public Layer<Dtype> {
   vector<Blob<Dtype>*> product_bottom_vec_;
 };
 
-#ifdef USE_CUDNN
-
-template <typename Dtype>
-class CuDNNLRNLayer : public LRNLayer<Dtype> {
- public:
-  explicit CuDNNLRNLayer(const LayerParameter& param)
-      : LRNLayer<Dtype>(param), handles_setup_(false) {}
-  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual ~CuDNNLRNLayer();
-
- protected:
-  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
-      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
-
-  bool handles_setup_;
-  cudnnHandle_t             handle_;
-  cudnnLRNDescriptor_t norm_desc_;
-  cudnnTensorDescriptor_t bottom_desc_, top_desc_;
-
-  int size_;
-  Dtype alpha_, beta_, k_;
-};
-
-template <typename Dtype>
-class CuDNNLCNLayer : public LRNLayer<Dtype> {
- public:
-  explicit CuDNNLCNLayer(const LayerParameter& param)
-      : LRNLayer<Dtype>(param), handles_setup_(false), tempDataSize(0),
-        tempData1(NULL), tempData2(NULL) {}
-  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual ~CuDNNLCNLayer();
-
- protected:
-  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom,
-      const vector<Blob<Dtype>*>& top);
-  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
-      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
-
-  bool handles_setup_;
-  cudnnHandle_t             handle_;
-  cudnnLRNDescriptor_t norm_desc_;
-  cudnnTensorDescriptor_t bottom_desc_, top_desc_;
-
-  int size_, pre_pad_;
-  Dtype alpha_, beta_, k_;
-
-  size_t tempDataSize;
-  void *tempData1, *tempData2;
-};
-
-#endif
 
 /**
  * @brief Pools the input image by taking the max, average, etc. within regions.
@@ -536,6 +538,10 @@ class PoolingLayer : public Layer<Dtype> {
   virtual inline int MaxTopBlobs() const {
     return (this->layer_param_.pooling_param().pool() ==
             PoolingParameter_PoolMethod_MAX) ? 2 : 1;
+  }
+  virtual inline DiagonalAffineMap<Dtype> coord_map() {
+    return FilterMap<Dtype>(kernel_h_, kernel_w_, stride_h_, stride_w_,
+        pad_h_, pad_w_).inv();
   }
 
  protected:
@@ -591,6 +597,39 @@ class CuDNNPoolingLayer : public PoolingLayer<Dtype> {
   cudnnPoolingMode_t        mode_;
 };
 #endif
+
+template <typename Dtype>
+class CropLayer : public Layer<Dtype> {
+ public:
+  explicit CropLayer(const LayerParameter& param)
+      : Layer<Dtype>(param) {}
+  virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+  virtual void Reshape(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+
+  virtual inline const char* type() const { return "Crop"; }
+  virtual inline int ExactNumBottomBlobs() const { return 2; }
+  virtual inline int ExactNumTopBlobs() const { return 1; }
+  virtual inline DiagonalAffineMap<Dtype> coord_map() {
+    vector<pair<Dtype, Dtype> > coefs;
+    coefs.push_back(make_pair(1, - crop_h_));
+    coefs.push_back(make_pair(1, - crop_w_));
+    return DiagonalAffineMap<Dtype>(coefs);
+  }
+
+ protected:
+  virtual void Forward_cpu(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+  virtual void Backward_cpu(const vector<Blob<Dtype>*>& top,
+      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+  virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top);
+  virtual void Backward_gpu(const vector<Blob<Dtype>*>& top,
+      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom);
+
+  int crop_h_, crop_w_;
+};
 
 /**
  * @brief Does spatial pyramid pooling on the input image
@@ -653,6 +692,8 @@ class SPPLayer : public Layer<Dtype> {
   /// the internal Concat layers that the Flatten layers feed into
   shared_ptr<ConcatLayer<Dtype> > concat_layer_;
 };
+
+
 
 }  // namespace caffe
 

@@ -1,3 +1,5 @@
+#include <cmath>
+#include <cstring>
 #include <vector>
 
 #include "caffe/blob.hpp"

@@ -16,7 +16,6 @@
 
 #include "caffe/caffe.hpp"
 #include "caffe/python_layer.hpp"
-#include "caffe/sgd_solvers.hpp"
 
 // Temporary solution for numpy < 1.7 versions: old macro, no promises.
 // You're strongly advised to upgrade to >= 1.7.
@@ -134,8 +133,8 @@ void Net_SetInputArrays(Net<Dtype>* net, bp::object data_obj,
 
 Solver<Dtype>* GetSolverFromFile(const string& filename) {
   SolverParameter param;
-  ReadSolverParamsFromTextFileOrDie(filename, &param);
-  return SolverRegistry<Dtype>::CreateSolver(param);
+  ReadProtoFromTextFileOrDie(filename, &param);
+  return GetSolver<Dtype>(param);
 }
 
 struct NdarrayConverterGenerator {
@@ -298,15 +297,6 @@ BOOST_PYTHON_MODULE(_caffe) {
   bp::class_<AdaGradSolver<Dtype>, bp::bases<Solver<Dtype> >,
     shared_ptr<AdaGradSolver<Dtype> >, boost::noncopyable>(
         "AdaGradSolver", bp::init<string>());
-  bp::class_<RMSPropSolver<Dtype>, bp::bases<Solver<Dtype> >,
-    shared_ptr<RMSPropSolver<Dtype> >, boost::noncopyable>(
-        "RMSPropSolver", bp::init<string>());
-  bp::class_<AdaDeltaSolver<Dtype>, bp::bases<Solver<Dtype> >,
-    shared_ptr<AdaDeltaSolver<Dtype> >, boost::noncopyable>(
-        "AdaDeltaSolver", bp::init<string>());
-  bp::class_<AdamSolver<Dtype>, bp::bases<Solver<Dtype> >,
-    shared_ptr<AdamSolver<Dtype> >, boost::noncopyable>(
-        "AdamSolver", bp::init<string>());
 
   bp::def("get_solver", &GetSolverFromFile,
       bp::return_value_policy<bp::manage_new_object>());

@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <vector>
